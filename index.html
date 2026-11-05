@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
+<title>Binance Live Analyzer</title>
+<script src="https://unpkg.com/lightweight-charts@4.2.2/dist/lightweight-charts.standalone.production.js"></script>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#0b1220;color:#e8eef9;font:14px Arial,sans-serif}
+header{padding:17px 16px;background:#111c2e;border-bottom:1px solid #24334a}
+h1{font-size:19px;margin:0 0 5px}.muted{color:#91a2bb;font-size:12px}
+main{padding:14px;max-width:850px;margin:auto}.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+select,button{background:#17243a;color:#eef4ff;border:1px solid #31445f;border-radius:9px;padding:10px;font-size:14px}
+button{cursor:pointer}.price{font-size:27px;font-weight:bold;margin:14px 0 4px}.up{color:#37d69a}.down{color:#ff737d}
+#chart{height:330px;width:100%;margin-top:12px;background:#101a2b;border-radius:12px;overflow:hidden}
+.cards{display:grid;grid-template-columns:repeat(2,1fr);gap:9px;margin-top:12px}
+.card{background:#121f33;border:1px solid #263750;border-radius:11px;padding:12px}.label{color:#91a2bb;font-size:11px}.value{font-size:17px;font-weight:bold;margin-top:6px}
+.signal{font-size:20px}.notice{font-size:11px;color:#9aabc3;line-height:1.5;margin-top:15px}
+#status{margin-top:9px;color:#f5c76b;font-size:12px}
+@media(min-width:650px){.cards{grid-template-columns:repeat(4,1fr)}}
+</style></head>
+<body>
+<header><h1>📊 Binance Live Analyzer</h1><div class="muted">Spot market • Live public data • Educational demo</div></header>
+<main>
+<div class="row">
+<select id="symbol"><option>BTCUSDT</option><option>ETHUSDT</option><option>BNBUSDT</option><option>SOLUSDT</option><option>XRPUSDT</option><option>ADAUSDT</option></select>
+<select id="interval"><option>1m</option><option>5m</option><option>15m</option><option>1h</option><option>4h</option><option>1d</option></select>
+<button id="refresh">Reconnect</button>
+</div>
+<div class="price" id="price">Loading…</div><div class="muted" id="pair">BTC/USDT</div>
+<div id="chart"></div><div id="status">Connecting to Binance public market stream…</div>
+<div class="cards">
+<div class="card"><div class="label">Educational signal</div><div class="value signal" id="signal">WAIT</div></div>
+<div class="card"><div class="label">RSI (14)</div><div class="value" id="rsi">—</div></div>
+<div class="card"><div class="label">EMA (9 / 21)</div><div class="value" id="ema">—</div></div>
+<div class="card"><div class="label">MACD trend</div><div class="value" id="macd">—</div></div>
+</div>
+<div class="cards">
+<div class="card"><div class="label">24h change</div><div class="value" id="change">—</div></div>
+<div class="card"><div class="label">24h high</div><div class="value" id="high">—</div></div>
+<div class="card"><div class="label">24h low</div><div class="value" id="low">—</div></div>
+<div class="card"><div class="label">24h volume</div><div class="value" id="volume">—</div></div>
+</div>
+<div class="notice">For learning and market observation only. Indicator readings are estimates, not guaranteed predictions or financial advice. This demo does not place orders, connect a wallet, or request API keys. Crypto prices can change rapidly.</div>
+</main>
+<script>
+const $=id=>document.getElementById(id); let ws=null, chart=null, candles=null, bars=[], lastPrice=0;
+function setupChart(){
+ const el=$('chart'); chart=LightweightCharts.createChart(el,{width:el.clientWidth,height:330,layout:{background:{color:'#101a2b'},textColor:'#b8c6da'},grid:{vertLines:{color:'#1d2b40'},horzLines:{color:'#1d2b40'}},timeScale:{timeVisible:true,secondsVisible:false},rightPriceScale:{borderColor:'#34445b'}});
+ candles=chart.addCandlestickSeries({upColor:'#22c993',downColor:'#ff6574',borderUpColor:'#22c993',borderDownColor:'#ff6574',wickUpColor:'#22c993',wickDownColor:'#ff6574'});
+ window.addEventListener('resize',()=>chart.applyOptions({width:el.clientWidth}));
+}
+function ema(values,n){let k=2/(n+1),out=[];values.forEach((v,i)=>out.push(i? v*k+out[i-1]*(1-k):v));return out}
+function rsi(vals,n=14){if(vals.length<n+1)return null;let gains=0,loss=0;for(let i=vals.length-n;i<vals.length;i++){let d=vals[i]-vals[i-1];if(d>0)gains+=d;else loss-=d}if(loss===0)return 100;let rs=(gains/n)/(loss/n);return 100-100/(1+rs)}
+function analyze(){
+ if(bars.length<25)return;
+ let closes=bars.map(x=>x.close), e9=ema(closes,9),e21=ema(closes,21),rv=rsi(closes),fast=ema(closes,12),slow=ema(closes,26),mac=fast.map((v,i)=>v-slow[i]),sig=ema(mac,9),m=mac.at(-1)-sig.at(-1);
+ $('rsi').textContent=rv===null?'—':rv.toFixed(1);
+ $('ema').textContent=e9.at(-1).toFixed(2)+' / '+e21.at(-1).toFixed(2);
+ $('macd').textContent=m>0?'Positive':'Negative';
+ let s='WAIT',cls='';
+ if(e9.at(-1)>e21.at(-1)&&m>0&&rv<70){s='BULLISH';cls='up'}
+ if(e9.at(-1)<e21.at(-1)&&m<0&&rv>30){s='BEARISH';cls='down'}
+ $('signal').textContent=s;$('signal').className='value signal '+cls;
+}
+function connect(){
+ if(ws){ws.close();ws=null}
+ bars=[];candles.setData([]);$('status').textContent='Connecting…';
+ let sym=$('symbol').value.toLowerCase(),tf=$('interval').value;
+ $('pair').textContent=$('symbol').value.replace('USDT','/USDT');
+ fetch('https://api.binance.com/api/v3/klines?symbol='+sym.toUpperCase()+'&interval='+tf+'&limit=100')
+ .then(r=>r.json()).then(data=>{
+  bars=data.map(k=>({time:Math.floor(k[0]/1000),open:+k[1],high:+k[2],low:+k[3],close:+k[4]}));
+  candles.setData(bars);analyze();chart.timeScale().fitContent();
+ }).catch(()=>{$('status').textContent='Could not load history. Check internet connection.'});
+ fetch('https://api.binance.com/api/v3/ticker/24hr?symbol='+sym.toUpperCase()).then(r=>r.json()).then(d=>{
+ $('change').textContent=(+d.priceChangePercent).toFixed(2)+'%';$('change').className='value '+(+d.priceChangePercent>=0?'up':'down');
+ $('high').textContent=(+d.highPrice).toLocaleString();$('low').textContent=(+d.lowPrice).toLocaleString();$('volume').textContent=(+d.volume).toLocaleString();
+ }).catch(()=>{});
+ ws=new WebSocket('wss://stream.binance.com:9443/ws/'+sym+'@kline_'+tf);
+ ws.onopen=()=>$('status').textContent='Live connection active';
+ ws.onmessage=e=>{
+  let d=JSON.parse(e.data).k, b={time:Math.floor(d.t/1000),open:+d.o,high:+d.h,low:+d.l,close:+d.c};
+  lastPrice=b.close;$('price').textContent=b.close.toLocaleString(undefined,{maximumFractionDigits:8})+' USDT';
+  $('price').className='price '+(b.close>=b.open?'up':'down');
+  if(bars.length&&bars.at(-1).time===b.time)bars[bars.length-1]=b;else bars.push(b);
+  if(bars.length>300)bars.shift();candles.update(b);analyze();
+ };
+ ws.onerror=()=>$('status').textContent='Live stream error. Tap Reconnect.';
+ ws.onclose=()=>{if($('status').textContent==='Live connection active')$('status').textContent='Connection closed. Tap Reconnect.'};
+}
+$('refresh').onclick=connect;$('symbol').onchange=connect;$('interval').onchange=connect;
+setupChart();connect();
+</script></body></html>
